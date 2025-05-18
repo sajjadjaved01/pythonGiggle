@@ -423,7 +423,7 @@ class MacAutomation:
             pass
 
     def run_workflow(self) -> None:
-        """Run automated workflow until stopped."""
+        """Run macOS-compatible automated workflow until stopped."""
         # Setup logging
         workflow_log = self._setup_workflow_logging()
 
@@ -447,7 +447,7 @@ class MacAutomation:
                 if not self.running:
                     break
 
-                # Execute extended random tasks
+                # Execute extended macOS-native tasks
                 self.perform_random_tasks()
 
                 # Natural pause between sequences
@@ -685,7 +685,7 @@ class MacAutomation:
             time.sleep(random.uniform(1.5, 4))
 
     def perform_random_tasks(self) -> None:
-        """Execute a random sequence of tasks without repetition."""
+        """Execute a random sequence of tasks with macOS‐native app switching."""
         quick_task_sequences = [
             {
                 'name': 'Quick Code Review',
@@ -816,30 +816,51 @@ class MacAutomation:
             {
                 'name': 'Full Development Cycle',
                 'actions': [
-                    # Code review and updates
                     lambda: self.switch_to_app('Visual Studio Code'),
                     lambda: self._vscode_coding_session(),
-                    lambda: time.sleep(random.uniform(
-                        180, 300)),  # 3-5 minutes coding
-                    # Check documentation
+                    lambda: time.sleep(random.uniform(180, 300)),  # 3-5 minutes coding
                     lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.chrome_stackoverflow_search(
-                        'laravel best practices with vite'),
-                    # 2-3 minutes reading
-                    lambda: time.sleep(random.uniform(120, 180)),
-                    # Back to coding
+                    lambda: self.chrome_stackoverflow_search('laravel best practices with vite'),
+                    lambda: time.sleep(random.uniform(120, 180)),  # 2-3 minutes reading
                     lambda: self.switch_to_app('Visual Studio Code'),
                     lambda: self._simulate_debugging_session(),
-                    # 4-6 minutes debugging
-                    lambda: time.sleep(random.uniform(240, 360))
+                    lambda: time.sleep(random.uniform(240, 360))   # 4-6 minutes debugging
                 ]
             },
+            {
+                'name': 'Developer Intensive Workflow',
+                'actions': [
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self.vscode_search_files(),
+                    lambda: time.sleep(1),
+                    lambda: self.natural_mouse_movement(random.randint(300, 500), random.randint(200, 300)),
+                    lambda: self.natural_typing('def new_function():'),
+                    lambda: pyautogui.press('return'),
+                    lambda: self.natural_typing('    pass'),
+                    lambda: pyautogui.press('return'),
+                    lambda: time.sleep(1),
+                    lambda: self.natural_mouse_movement(random.randint(300, 500), random.randint(400, 600)),
+                    lambda: self.click_position(random.randint(300, 500), random.randint(400, 600)),
+                    lambda: self.switch_tab('next'),
+                    lambda: time.sleep(3),
+                    lambda: self.vscode_dev_tools(),
+                    lambda: self.natural_mouse_wiggle(),
+                    lambda: self.vscode_toggle_terminal(),
+                    lambda: self.natural_typing('npm start'),
+                    lambda: pyautogui.press('return'),
+                    lambda: time.sleep(3),
+                    lambda: self.switch_to_app('Google Chrome'),
+                    lambda: self.natural_mouse_movement(random.randint(100, 300), random.randint(100, 300)),
+                    lambda: self.chrome_google_search('latest vscode tips'),
+                    lambda: self.browser_refresh(),
+                    # Extended macOS-native work period (15–25 min)
+                    lambda: time.sleep(random.uniform(900, 1500))
+                ]
+            }
         ]
-
-        # Select and execute 1-2 extended sequences
-        selected_sequences = random.sample(
-            extended_task_sequences, random.randint(1, 2))
-
+        
+        # Ensure macOS app focus after each extended task action
+        selected_sequences = random.sample(extended_task_sequences, random.randint(1, 2))
         for sequence in selected_sequences:
             print(f"\nExecuting extended task: {sequence['name']}")
             for action in sequence['actions']:
@@ -847,9 +868,10 @@ class MacAutomation:
                     return
                 try:
                     action()
-                    # Add random "thinking" pauses
+                    # Verify macOS frontmost app after critical actions
+                    if not self.verify_application_state('Visual Studio Code') and not self.verify_application_state('Google Chrome'):
+                        raise RuntimeError("Application switch failed")
                     if random.random() > 0.7:
-                        # 30-60 second pauses
                         time.sleep(random.uniform(30, 60))
                 except Exception as e:
                     print(f"Error in {sequence['name']}: {e}")
