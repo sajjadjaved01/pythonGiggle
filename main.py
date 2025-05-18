@@ -383,13 +383,14 @@ class MacAutomation:
             print("\nStarting automation workflow...")
             self.running = True
             # Start in a new thread to keep hotkeys responsive
-            threading.Thread(target=self.run_timed_workflow,
+            threading.Thread(target=self.run_workflow,
                              daemon=True).start()
 
         # Check for stop combination
         elif self.stop_keys.issubset(self.current_keys) and self.running:
             print("\nStopping automation...")
             self.running = False
+            self.paused = False
 
         # Check for pause combination
         elif self.pause_keys.issubset(self.current_keys) and self.running:
@@ -405,13 +406,10 @@ class MacAutomation:
             # Key wasn't in the set
             pass
 
-    def run_timed_workflow(self, duration_minutes: int = 15) -> None:
-        """Run automated workflow for specified duration."""
+    def run_workflow(self) -> None:
+        """Run automated workflow until stopped."""
         # Setup logging
         workflow_log = self._setup_workflow_logging()
-
-        start_time = time.time()
-        end_time = start_time + (duration_minutes * 60)
 
         search_queries = [
             'python best practices',
@@ -425,7 +423,7 @@ class MacAutomation:
         local_urls = self.config['development']['local_urls']
         dev_commands = self.config['development']['common_commands']
 
-        while time.time() < end_time and self.running:
+        while self.running:
             try:
                 # Check if paused
                 while self.paused and self.running:
@@ -519,8 +517,7 @@ class MacAutomation:
                 print(f"Error occurred: {e}")
                 continue
 
-        print("Workflow completed" if time.time()
-              >= end_time else "Workflow stopped")
+        print("Workflow stopped")
 
     def _setup_workflow_logging(self) -> Dict[str, Any]:
         """Set up logging for the workflow session.
@@ -567,6 +564,8 @@ class MacAutomation:
 
     def _vscode_file_navigation(self) -> None:
         """Simulate file navigation in VSCode."""
+        if not self.running:
+            return
         self.vscode_search_files()
         time.sleep(random.uniform(1, 3))
 
@@ -592,6 +591,8 @@ class MacAutomation:
 
     def _vscode_terminal_work(self, commands: list) -> None:
         """Simulate terminal usage in VSCode."""
+        if not self.running:
+            return
         self.vscode_toggle_terminal()
         time.sleep(random.uniform(1, 3))
 
@@ -615,6 +616,8 @@ class MacAutomation:
 
     def _vscode_coding_session(self) -> None:
         """Simulate actual coding activities."""
+        if not self.running:
+            return
         # Navigate between open files
         for _ in range(random.randint(2, 4)):
             self.switch_tab(random.choice(['next', 'previous']))
@@ -644,6 +647,8 @@ class MacAutomation:
 
     def _simulate_debugging_session(self) -> None:
         """Simulate a debugging session in VSCode."""
+        if not self.running:
+            return
         # Set breakpoint
         pyautogui.press('f9')
         time.sleep(random.uniform(1, 2))
@@ -674,6 +679,8 @@ class MacAutomation:
 
     def _vscode_ui_interactions(self) -> None:
         """Simulate interactions with VSCode UI elements."""
+        if not self.running:
+            return
         ui_actions = [
             self.vscode_open_explorer,
             self.vscode_open_extension,
