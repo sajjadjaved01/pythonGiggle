@@ -5,6 +5,8 @@ from typing import Tuple, Optional, Dict, Any, List, Callable
 import random
 import threading
 from pynput import keyboard
+from AppKit import NSWorkspace  # added macOS API for active app detection
+import subprocess
 
 from automation.config import DEFAULT_CONFIG
 
@@ -47,14 +49,57 @@ class MacAutomation:
         """Type text with specified interval between keystrokes."""
         pyautogui.write(text, interval=interval)
 
+    def _normalize_app_name(self, app_name: str) -> str:
+        """Map friendly name to actual macOS application name for AppleScript."""
+        mapping = {
+            'chrome': 'Google Chrome',
+            'google chrome': 'Google Chrome',
+            'vscode': 'Visual Studio Code',
+            'visual studio code': 'Visual Studio Code'
+        }
+        return mapping.get(app_name.lower(), app_name)
+
     def switch_to_app(self, app_name: str) -> None:
-        """Switch to specified application using Command + Tab."""
-        pyautogui.hotkey('command', 'space')
-        time.sleep(0.5)
-        pyautogui.write(app_name)
-        time.sleep(0.5)
-        pyautogui.press('return')
-        time.sleep(1)  # Wait for app to focus
+        """Bring application to front using AppleScript and confirm focus."""
+        normalized = self._normalize_app_name(app_name)
+        max_retries = self.config['safety']['max_retries']
+        retry_delay = self.config['safety']['retry_delay']
+        for attempt in range(max_retries):
+            try:
+                # Use AppleScript to activate the app
+                subprocess.run(
+                    ['osascript', '-e',
+                        f'tell application "{normalized}" to activate'],
+                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+            except Exception:
+                # fallback to Spotlight if AppleScript fails
+                pyautogui.hotkey('command', 'space')
+                time.sleep(self.config['timing']['app_switch_delay'])
+                pyautogui.write(normalized)
+                pyautogui.press('return')
+            # allow time to switch
+            time.sleep(self.config['timing']['app_switch_delay'] + 0.5)
+            if self.verify_application_state(normalized):
+                return
+            time.sleep(retry_delay)
+        raise RuntimeError(f"Unable to focus application: {normalized}")
+
+    def verify_application_state(self, app_name: str) -> bool:
+        """Verify that the expected application is currently in focus using macOS AppKit.
+
+        Args:
+            app_name (str): Name of the application to verify
+
+        Returns:
+            bool: True if frontmost application matches app_name
+        """
+        try:
+            normalized = self._normalize_app_name(app_name)
+            active_app = NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()
+            return normalized.lower() in active_app.lower()
+        except Exception:
+            return False
 
     def chrome_new_tab(self) -> None:
         """Open new tab in Chrome."""
@@ -101,37 +146,6 @@ class MacAutomation:
         pyautogui.hotkey('command', 'v')
         pyautogui.press('return')
         time.sleep(2.5)  # Wait for search results
-
-    def verify_application_state(self, app_name: str) -> bool:
-        """Verify that the expected application is currently in focus.
-
-        Args:
-            app_name (str): Name of the application to verify
-
-        Returns:
-            bool: True if verification successful, False otherwise
-        """
-        # This is a simplified check - a real implementation would use
-        # platform-specific APIs or image recognition to confirm
-        try:
-            # Different verification methods by app
-            if app_name.lower() == 'chrome' or app_name.lower() == 'google chrome':
-                # Check for Chrome's address bar
-                pyautogui.hotkey('command', 'l')
-                time.sleep(0.2)
-                pyautogui.hotkey('escape')
-                return True
-            elif app_name.lower() == 'visual studio code' or app_name.lower() == 'vscode':
-                # Check for VSCode's command palette
-                pyautogui.hotkey('command', 'shift', 'p')
-                time.sleep(0.2)
-                pyautogui.write('help')
-                time.sleep(0.2)
-                pyautogui.press('escape')
-                return True
-            return False
-        except Exception:
-            return False
 
     def chrome_bookmark_page(self) -> None:
         """Bookmark the current page in Chrome."""
@@ -382,6 +396,8 @@ class MacAutomation:
         if self.start_keys.issubset(self.current_keys) and not self.running:
             print("\nStarting automation workflow...")
             self.running = True
+            # Wait 8 seconds before starting workflow
+            time.sleep(8)
             # Start in a new thread to keep hotkeys responsive
             threading.Thread(target=self.run_workflow,
                              daemon=True).start()
@@ -425,94 +441,22 @@ class MacAutomation:
 
         while self.running:
             try:
-                # Check if paused
                 while self.paused and self.running:
-                    time.sleep(0.5)  # Sleep while paused
+                    time.sleep(0.5)
 
                 if not self.running:
-                    break  # Exit if stopped
+                    break
 
-                # Distribution: 30% web browsing, 70% VSCode development
-                activity_choice = random.choices(
-                    ['browser', 'vscode'],
-                    weights=[30, 70],
-                    k=1
-                )[0]
+                # Execute extended random tasks
+                self.perform_random_tasks()
 
-                if activity_choice == 'browser':
-                    self.switch_to_app('Google Chrome')
-
-                    # Prioritize local development URLs (50% of the time)
-                    if random.random() > 0.5 and local_urls:
-                        # Browse local development sites
-                        for url in random.sample(local_urls, min(2, len(local_urls))):
-                            self.chrome_navigate(url)
-                            time.sleep(random.uniform(5, 15))
-
-                            # Refresh local sites frequently to check for changes
-                            for _ in range(random.randint(1, 3)):
-                                self.browser_refresh()
-                                time.sleep(random.uniform(3, 8))
-                                self.natural_scroll(
-                                    'down', random.randint(100, 300))
-                                time.sleep(random.uniform(5, 15))
-                    else:
-                        # Regular browsing with documentation sites
-                        # Add Google searches with natural typing
-                        for query in random.sample(search_queries, 2):
-                            self.chrome_google_search(query)
-                            time.sleep(random.uniform(1, 3))
-
-                            # Natural scrolling with pauses
-                            self.natural_scroll(
-                                'down', random.randint(300, 800))
-
-                            # Occasionally wiggle mouse while reading
-                            if random.random() > 0.7:
-                                self.random_mouse_wiggle()
-
-                            # More natural navigation
-                            if random.random() > 0.6:
-                                self.natural_mouse_movement(
-                                    random.randint(100, 700),
-                                    random.randint(100, 500)
-                                )
-                                pyautogui.click()
-                                time.sleep(random.uniform(2, 5))
-
-                else:  # VSCode development session
-                    self.switch_to_app('Visual Studio Code')
-                    time.sleep(random.uniform(5, 10))
-
-                    # Extended VSCode activity sequence
-                    vscode_activities = [
-                        # File navigation and coding
-                        lambda: self._vscode_file_navigation(),
-                        # Terminal usage
-                        lambda: self._vscode_terminal_work(dev_commands),
-                        # Code editing and exploration
-                        lambda: self._vscode_coding_session(),
-                        # UI interactions (sidebar, extensions, etc)
-                        lambda: self._vscode_ui_interactions()
-                    ]
-
-                    # Perform 2-4 different VSCode activity groups
-                    for activity in random.sample(vscode_activities, random.randint(2, 4)):
-                        activity()
-
-                    # Long focus period for "actual coding"
-                    min_focus = self.config['timing']['vscode_focus_time']['min']
-                    max_focus = self.config['timing']['vscode_focus_time']['max']
-
-                    print("Deep work coding session...")
-                    self.maximize_window()
-                    time.sleep(random.uniform(min_focus, max_focus))
+                # Natural pause between sequences
+                time.sleep(random.uniform(60, 120))  # 1-2 minute breaks
 
             except pyautogui.FailSafeException:
                 print("Failsafe triggered - mouse moved to corner")
                 self.running = False
                 break
-
             except Exception as e:
                 print(f"Error occurred: {e}")
                 continue
@@ -637,6 +581,20 @@ class MacAutomation:
             pyautogui.press('return')
             time.sleep(random.uniform(3, 8))  # Think pause
 
+        # simulate selecting a code snippet with mouse drag
+        start_x, start_y = random.randint(300, 700), random.randint(200, 600)
+        end_x, end_y = start_x + \
+            random.randint(50, 150), start_y + random.randint(20, 100)
+        self.natural_mouse_movement(start_x, start_y)
+        pyautogui.mouseDown()
+        self.natural_mouse_movement(end_x, end_y)
+        pyautogui.mouseUp()
+        time.sleep(random.uniform(0.5, 1.5))
+
+        # occasionally save selection or bring up context menu
+        if random.random() > 0.5:
+            pyautogui.hotkey('command', 'c')  # copy
+
         # Save file occasionally
         if random.random() > 0.6:
             pyautogui.hotkey('command', 's')
@@ -688,20 +646,214 @@ class MacAutomation:
             self.vscode_split_editor,
             self.vscode_command_palette
         ]
-
-        # Perform random UI actions
         for action in random.sample(ui_actions, random.randint(1, 3)):
             action()
             time.sleep(random.uniform(3, 8))
+            # simulate clicking on a UI element (e.g. an explorer item or extension)
+            x, y = random.randint(100, 700), random.randint(100, 500)
+            self.natural_mouse_movement(x, y)
+            pyautogui.click()
+            time.sleep(random.uniform(1, 3))
 
-            # Occasionally click somewhere in the UI
-            if random.random() > 0.6:
-                self.natural_mouse_movement(
-                    random.randint(100, 700),
-                    random.randint(100, 500)
-                )
-                pyautogui.click()
-                time.sleep(random.uniform(1, 3))
+    def vscode_navigate_code(self) -> None:
+        """Navigate through code using VSCode's code navigation features."""
+        navigation_actions = [
+            (lambda: pyautogui.hotkey('command', 'f12'), "Go to Definition"),
+            (lambda: pyautogui.hotkey('command', 'shift', 'o'), "Go to Symbol"),
+            (lambda: pyautogui.hotkey('command', 'shift', 'r'), "Go to References"),
+            (lambda: pyautogui.hotkey('alt', 'left'), "Go Back"),
+            (lambda: pyautogui.hotkey('command', 'k', 'command', 'i'), "Show Hover")
+        ]
+
+        for action, name in random.sample(navigation_actions, random.randint(2, 4)):
+            action()
+            time.sleep(random.uniform(2, 5))
+
+    def vscode_dev_tools(self) -> None:
+        """Use various VSCode development tools."""
+        dev_actions = [
+            (lambda: pyautogui.hotkey('command', 'shift', 'f'), "Global Search"),
+            (lambda: pyautogui.hotkey('command', '.'), "Quick Fix"),
+            (lambda: pyautogui.hotkey('command', 'k',
+             'command', 'f'), "Format Selection"),
+            (lambda: pyautogui.hotkey('f8'), "Go to Next Problem"),
+            (lambda: pyautogui.hotkey('command', 'shift', 'm'), "Show Problems Panel")
+        ]
+
+        for action, name in random.sample(dev_actions, random.randint(2, 4)):
+            action()
+            time.sleep(random.uniform(1.5, 4))
+
+    def perform_random_tasks(self) -> None:
+        """Execute a random sequence of tasks without repetition."""
+        quick_task_sequences = [
+            {
+                'name': 'Quick Code Review',
+                'actions': [
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self.vscode_search_files(),
+                    lambda: self.natural_typing('main.py'),
+                    lambda: pyautogui.press('return'),
+                    lambda: self.natural_scroll(
+                        'down', random.randint(100, 200))
+                ]
+            },
+            {
+                'name': 'Quick Documentation Check',
+                'actions': [
+                    lambda: self.switch_to_app('Google Chrome'),
+                    lambda: self.chrome_stackoverflow_search(
+                        'python quick example'),
+                    lambda: self.natural_scroll(
+                        'down', random.randint(100, 200))
+                ]
+            },
+            {
+                'name': 'Quick Terminal Check',
+                'actions': [
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self.vscode_toggle_terminal(),
+                    lambda: self.natural_typing('git status'),
+                    lambda: pyautogui.press('return'),
+                    lambda: time.sleep(random.uniform(1, 2))
+                ]
+            },
+            {
+                'name': 'Quick Debug Check',
+                'actions': [
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: pyautogui.hotkey('command', 'shift', 'm'),
+                    lambda: time.sleep(random.uniform(1, 2)),
+                    lambda: pyautogui.press('escape')
+                ]
+            }
+        ]
+
+        # Select and execute 1-2 quick sequences for short duration
+        selected_sequences = random.sample(
+            quick_task_sequences, random.randint(1, 2))
+
+        for sequence in selected_sequences:
+            print(f"\nExecuting quick task: {sequence['name']}")
+            for action in sequence['actions']:
+                if not self.running or self.paused:
+                    return
+                try:
+                    action()
+                except Exception as e:
+                    print(f"Error in {sequence['name']}: {e}")
+                    continue
+                # Shorter pauses between actions
+                time.sleep(random.uniform(0.5, 1))
+
+        task_sequences = [
+            {
+                'name': 'Documentation Research',
+                'actions': [
+                    lambda: self.switch_to_app('Google Chrome'),
+                    lambda: self.chrome_navigate('https://github.com'),
+                    lambda: self.natural_scroll(
+                        'down', random.randint(200, 500)),
+                    lambda: time.sleep(random.uniform(10, 20)),
+                    lambda: self.chrome_navigate(
+                        'https://github.com/sajjadjaved01'),
+                    lambda: self.natural_scroll(
+                        'down', random.randint(300, 600))
+                ]
+            },
+            {
+                'name': 'Code Review',
+                'actions': [
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self.vscode_open_explorer(),
+                    lambda: time.sleep(random.uniform(3, 5)),
+                    lambda: self.natural_typing('git diff'),
+                    lambda: pyautogui.press('return'),
+                    lambda: self.natural_scroll(
+                        'down', random.randint(100, 300))
+                ]
+            },
+            {
+                'name': 'Bug Investigation',
+                'actions': [
+                    lambda: self.switch_to_app('Google Chrome'),
+                    lambda: self.chrome_stackoverflow_search(
+                        'python error handling best practices'),
+                    lambda: time.sleep(random.uniform(5, 10)),
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self._simulate_debugging_session()
+                ]
+            },
+            {
+                'name': 'API Testing',
+                'actions': [
+                    lambda: self.switch_to_app('Google Chrome'),
+                    lambda: self.chrome_navigate('http://localhost:8000'),
+                    lambda: time.sleep(random.uniform(3, 7)),
+                    lambda: self.natural_scroll(
+                        'down', random.randint(200, 400)),
+                    lambda: self.browser_refresh()
+                ]
+            }
+        ]
+
+        # Randomly select and execute 2-3 unique task sequences
+        selected_sequences = random.sample(
+            task_sequences, random.randint(2, 3))
+
+        for sequence in selected_sequences:
+            print(f"\nExecuting task sequence: {sequence['name']}")
+            for action in sequence['actions']:
+                if not self.running or self.paused:
+                    return
+                try:
+                    action()
+                except Exception as e:
+                    print(f"Error in {sequence['name']}: {e}")
+                    continue
+
+        extended_task_sequences = [
+            {
+                'name': 'Full Development Cycle',
+                'actions': [
+                    # Code review and updates
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self._vscode_coding_session(),
+                    lambda: time.sleep(random.uniform(
+                        180, 300)),  # 3-5 minutes coding
+                    # Check documentation
+                    lambda: self.switch_to_app('Google Chrome'),
+                    lambda: self.chrome_stackoverflow_search(
+                        'laravel best practices with vite'),
+                    # 2-3 minutes reading
+                    lambda: time.sleep(random.uniform(120, 180)),
+                    # Back to coding
+                    lambda: self.switch_to_app('Visual Studio Code'),
+                    lambda: self._simulate_debugging_session(),
+                    # 4-6 minutes debugging
+                    lambda: time.sleep(random.uniform(240, 360))
+                ]
+            },
+        ]
+
+        # Select and execute 1-2 extended sequences
+        selected_sequences = random.sample(
+            extended_task_sequences, random.randint(1, 2))
+
+        for sequence in selected_sequences:
+            print(f"\nExecuting extended task: {sequence['name']}")
+            for action in sequence['actions']:
+                if not self.running or self.paused:
+                    return
+                try:
+                    action()
+                    # Add random "thinking" pauses
+                    if random.random() > 0.7:
+                        # 30-60 second pauses
+                        time.sleep(random.uniform(30, 60))
+                except Exception as e:
+                    print(f"Error in {sequence['name']}: {e}")
+                    continue
 
 
 # Example usage with global hotkeys
