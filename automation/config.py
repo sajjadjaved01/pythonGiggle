@@ -61,5 +61,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             'docker ps',
             'npm run dev'
         ]
-    }
+    },
+    'monitor_path': {
+        'base_path': "/Users/apple/Library/Application Support/Hubstaff",
+        'extensions': ['.txt', '.log'],
+        'interval': 5,
+        'max_files': 10
+    },
 }

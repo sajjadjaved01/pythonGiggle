@@ -7,9 +7,14 @@ import threading
 from pynput import keyboard
 from AppKit import NSWorkspace  # added macOS API for active app detection
 import subprocess
+import os
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import tkinter as tk
+from tkinter import ttk
+import xml.etree.ElementTree as ET
 
 from automation.config import DEFAULT_CONFIG
-
 
 class MacAutomation:
     """Class to handle automated interactions with macOS applications."""
@@ -25,6 +30,17 @@ class MacAutomation:
         pyautogui.FAILSAFE = self.config['safety']['failsafe']
         pyautogui.PAUSE = self.config['safety']['pause']
 
+        # Parse the XML file
+        orgPath = self.config['monitor_path']['base_path'] + '/data/hubstaff.com/f8fb64d046ca609d94cdc23ecfdf83bb07647126/Organization.xml'
+        organization_data = self.parse_organization_xml(orgPath)
+        
+        # Text to be typed, will be updated by user
+        self.text_to_type = ""
+        
+        # File monitoring setup
+        self.observer = None
+        self.file_monitor_running = False
+
     def _merge_config(self, custom_config: Dict[str, Any]) -> None:
         """Deep merge custom configuration with defaults."""
         def _merge_dicts(default: Dict, custom: Dict) -> Dict:
@@ -36,6 +52,41 @@ class MacAutomation:
             return default
 
         _merge_dicts(self.config, custom_config)
+
+    @staticmethod
+    def parse_organization_xml(file_path):
+        """Parse the Organization.xml file and extract organization details.
+
+        Args:
+            file_path (str): Path to the XML file.
+
+        Returns:
+            dict: Extracted organization data.
+        """
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+
+        # Extract organization details
+        organization = root.find(".//item")
+        metadata = organization.find("metadata")
+
+        data = {
+            "Organization ID": organization.find("organization_id").text,
+            "Name": organization.find("name").text,
+            "Screen Frequency": metadata.find("screen_frequency").text,
+            "Idle Timeout": metadata.find("idle_timeout").text,
+            "Screen Blur": metadata.find("screen_blur").text,
+            "App Tracking": metadata.find("app_tracking").text,
+            "Keep Idle": metadata.find("keep_idle").text,
+            "Location Tracking": metadata.find("location_tracking").text,
+            "Clients Allowed": metadata.find("clients_allowed").text,
+            "Work Session Gap (Hours)": metadata.find(".//time_duration_hours").text,
+            "Time Zone": metadata.find("time_zone").text,
+            "Start Week On": metadata.find("start_week_on").text,
+            "Color": metadata.find("color").text,
+            "Monitor Background Processes": metadata.find("monitor_background_processes").text,
+        }
+        return data
 
     def move_mouse(self, x: int, y: int, duration: float = 0.5) -> None:
         """Move mouse to specified coordinates."""
@@ -317,36 +368,6 @@ class MacAutomation:
             if random.random() < 0.1:
                 time.sleep(random.uniform(0.3, 1.0))
 
-    def natural_scroll(self, direction: str = 'down', distance: int = 300) -> None:
-        """Scroll with varying speeds and pauses.
-
-        Args:
-            direction (str): 'up' or 'down'
-            distance (int): Total scroll distance
-        """
-        remaining = distance
-        while remaining > 0:
-            # Variable scroll amount
-            amount = min(remaining, random.randint(20, 100))
-            remaining -= amount
-
-            # Variable scroll speed
-            if direction == 'down':
-                pyautogui.scroll(-amount)
-            else:
-                pyautogui.scroll(amount)
-
-            # Random pause between scrolls
-            if random.random() < 0.3:
-                time.sleep(random.uniform(0.3, 1.5))
-
-    def random_mouse_wiggle(self) -> None:
-        """Slightly move mouse in random direction to simulate human hand movement."""
-        current_x, current_y = pyautogui.position()
-        offset_x = random.randint(-10, 10)
-        offset_y = random.randint(-10, 10)
-        self.natural_mouse_movement(current_x + offset_x, current_y + offset_y)
-
     def setup_global_hotkeys(self) -> None:
         """Set up global keyboard shortcuts for controlling automation.
 
@@ -354,6 +375,7 @@ class MacAutomation:
         - Ctrl+Option+S: Start automation workflow
         - Ctrl+Option+X: Stop running automation
         - Ctrl+Option+P: Pause/resume automation
+        - Ctrl+Option+T: Set text to type
         """
         self.running = False
         self.paused = False
@@ -366,6 +388,8 @@ class MacAutomation:
                           keyboard.Key.alt, keyboard.KeyCode.from_char('x')}
         self.pause_keys = {keyboard.Key.ctrl,
                            keyboard.Key.alt, keyboard.KeyCode.from_char('p')}
+        self.text_keys = {keyboard.Key.ctrl,
+                          keyboard.Key.alt, keyboard.KeyCode.from_char('t')}
 
         # Track currently pressed keys
         self.current_keys = set()
@@ -377,6 +401,7 @@ class MacAutomation:
         print("  Ctrl+Option+S: Start automation")
         print("  Ctrl+Option+X: Stop automation")
         print("  Ctrl+Option+P: Pause/Resume automation")
+        print("  Ctrl+Option+T: Set text to type")
 
     def _start_keyboard_listener(self) -> None:
         """Start the keyboard listener in a daemon thread."""
@@ -396,10 +421,10 @@ class MacAutomation:
         if self.start_keys.issubset(self.current_keys) and not self.running:
             print("\nStarting automation workflow...")
             self.running = True
-            # Wait 8 seconds before starting workflow
-            time.sleep(8)
+            # Wait 3 seconds before starting workflow
+            time.sleep(3)
             # Start in a new thread to keep hotkeys responsive
-            threading.Thread(target=self.run_workflow,
+            threading.Thread(target=self.run_focused_workflow,
                              daemon=True).start()
 
         # Check for stop combination
@@ -413,6 +438,10 @@ class MacAutomation:
             self.paused = not self.paused
             status = "Paused" if self.paused else "Resumed"
             print(f"\n{status} automation...")
+            
+        # Check for text input combination
+        elif self.text_keys.issubset(self.current_keys):
+            self.set_text_to_type()
 
     def _on_key_release(self, key) -> None:
         """Handle key release events."""
@@ -421,24 +450,36 @@ class MacAutomation:
         except KeyError:
             # Key wasn't in the set
             pass
+            
+    def set_text_to_type(self) -> None:
+        """Prompt user to input text that will be typed by the automation."""
+        try:
+            print("\nEnter text to be typed (press Enter when done):")
+            # Use subprocess to run the osascript command for user input
+            result = subprocess.run(
+                ['osascript', '-e', 'text returned of (display dialog "Enter text to be typed:" default answer "" with title "Text Input")'],
+                capture_output=True, text=True, check=True
+            )
+            self.text_to_type = result.stdout.strip()
+            print(f"Text set: {self.text_to_type[:30]}{'...' if len(self.text_to_type) > 30 else ''}")
+        except Exception as e:
+            print(f"Error getting text input: {e}")
+            
+    def random_mouse_wiggle(self) -> None:
+        """Slightly move mouse in random direction to simulate human hand movement."""
+        current_x, current_y = pyautogui.position()
+        offset_x = random.randint(-10, 10)
+        offset_y = random.randint(-10, 10)
+        self.natural_mouse_movement(current_x + offset_x, current_y + offset_y)
+        
+    def run_focused_workflow(self) -> None:
+        """Run a focused workflow with mouse movement and keyboard typing until stopped."""
+        print("Running focused workflow. Press Ctrl+Option+T to set text to type.")
+        print("Starting file monitoring for " + self.config['monitor_path']['base_path'])
 
-    def run_workflow(self) -> None:
-        """Run macOS-compatible automated workflow until stopped."""
-        # Setup logging
-        workflow_log = self._setup_workflow_logging()
-
-        search_queries = [
-            'python best practices',
-            'software design patterns',
-            'git workflow examples',
-            'coding best practices',
-            'web development trends'
-        ]
-
-        # Get local development URLs from config
-        local_urls = self.config['development']['local_urls']
-        dev_commands = self.config['development']['common_commands']
-
+        # Start file monitoring
+        self.start_file_monitoring()
+        
         while self.running:
             try:
                 while self.paused and self.running:
@@ -447,11 +488,23 @@ class MacAutomation:
                 if not self.running:
                     break
 
-                # Execute extended macOS-native tasks
-                self.perform_random_tasks()
-
-                # Natural pause between sequences
-                time.sleep(random.uniform(60, 120))  # 1-2 minute breaks
+                # Determine if we should move the mouse (20-40% of the time)
+                if random.random() < 0.4:  # 40% maximum probability for mouse movement
+                    self.perform_mouse_action()
+                
+                # Otherwise, perform a keyboard action if text is available
+                elif self.text_to_type:
+                    # Type a portion of the text
+                    portion_size = random.randint(5, min(20, len(self.text_to_type)))
+                    if portion_size > 0:
+                        text_portion = self.text_to_type[:portion_size]
+                        self.natural_typing(text_portion)
+                        # Remove the typed portion from the text
+                        self.text_to_type = self.text_to_type[portion_size:]
+                        print(f"Typed: {text_portion}")
+                
+                # Random pause between actions
+                time.sleep(random.uniform(0.5, 2.0))
 
             except pyautogui.FailSafeException:
                 print("Failsafe triggered - mouse moved to corner")
@@ -459,423 +512,119 @@ class MacAutomation:
                 break
             except Exception as e:
                 print(f"Error occurred: {e}")
+                time.sleep(1)
                 continue
 
+        # Stop file monitoring when workflow ends
+        self.stop_file_monitoring()
         print("Workflow stopped")
-
-    def _setup_workflow_logging(self) -> Dict[str, Any]:
-        """Set up logging for the workflow session.
-
-        Returns:
-            Dict[str, Any]: Log dictionary to track metrics
-        """
-        return {
-            'start_time': time.time(),
-            'actions': [],
-            'app_time': {
-                'vscode': 0,
-                'chrome': 0,
-                'other': 0
-            },
-            'errors': []
-        }
-
-    def _log_action(self, log: Dict[str, Any], action: str, app: str, success: bool,
-                    error: Optional[str] = None) -> None:
-        """Log an action to the workflow log.
-
-        Args:
-            log (Dict[str, Any]): Workflow log dictionary
-            action (str): Action performed
-            app (str): Application where action was performed
-            success (bool): Whether action was successful
-            error (Optional[str]): Error message if applicable
-        """
-        log['actions'].append({
-            'timestamp': time.time(),
-            'action': action,
-            'app': app,
-            'success': success,
-            'error': error
-        })
-
-        if not success and error:
-            log['errors'].append({
-                'timestamp': time.time(),
-                'action': action,
-                'error': error
-            })
-
-    def _vscode_file_navigation(self) -> None:
-        """Simulate file navigation in VSCode."""
-        if not self.running:
-            return
-        self.vscode_search_files()
-        time.sleep(random.uniform(1, 3))
-
-        # Type different file types to search
-        file_extensions = self.config['development']['file_extensions']
-        for _ in range(random.randint(2, 4)):
-            ext = random.choice(file_extensions)
-            self.natural_typing(f"file{ext}")
-            time.sleep(random.uniform(2, 5))
-            pyautogui.press('escape')
-            time.sleep(random.uniform(1, 3))
-
-        # Open a file
-        self.vscode_search_files()
-        time.sleep(random.uniform(1, 2))
-        self.natural_typing("main")
-        time.sleep(random.uniform(0.5, 1))
-        pyautogui.press('return')
-
-        # Scroll and read through file
-        self.natural_scroll('down', random.randint(400, 800))
-        time.sleep(random.uniform(10, 20))
-
-    def _vscode_terminal_work(self, commands: list) -> None:
-        """Simulate terminal usage in VSCode."""
-        if not self.running:
-            return
-        self.vscode_toggle_terminal()
-        time.sleep(random.uniform(1, 3))
-
-        # Execute 2-3 commands
-        for _ in range(random.randint(2, 3)):
-            command = random.choice(commands)
-            self.natural_typing(command)
-            time.sleep(random.uniform(0.5, 1))
-            pyautogui.press('return')
-            time.sleep(random.uniform(3, 8))
-
-        # Sometimes clear terminal
-        if random.random() > 0.7:
-            self.natural_typing("clear")
-            pyautogui.press('return')
-
-        time.sleep(random.uniform(1, 3))
-        # Toggle terminal off sometimes
-        if random.random() > 0.5:
-            self.vscode_toggle_terminal()
-
-    def _vscode_coding_session(self) -> None:
-        """Simulate actual coding activities."""
-        if not self.running:
-            return
-        # Navigate between open files
-        for _ in range(random.randint(2, 4)):
-            self.switch_tab(random.choice(['next', 'previous']))
-            time.sleep(random.uniform(2, 5))
-
-        # Code navigation activities
-        self.vscode_navigate_code()
-
-        # Simulated typing code with pauses
-        for _ in range(random.randint(1, 3)):
-            # Type some code with natural typing
-            self.natural_typing("def process_data(input_data):")
-            pyautogui.press('return')
-            self.natural_typing("    result = []")
-            pyautogui.press('return')
-            self.natural_typing("    for item in input_data:")
-            pyautogui.press('return')
-            time.sleep(random.uniform(3, 8))  # Think pause
-
-        # simulate selecting a code snippet with mouse drag
-        start_x, start_y = random.randint(300, 700), random.randint(200, 600)
-        end_x, end_y = start_x + \
-            random.randint(50, 150), start_y + random.randint(20, 100)
-        self.natural_mouse_movement(start_x, start_y)
-        pyautogui.mouseDown()
-        self.natural_mouse_movement(end_x, end_y)
-        pyautogui.mouseUp()
-        time.sleep(random.uniform(0.5, 1.5))
-
-        # occasionally save selection or bring up context menu
-        if random.random() > 0.5:
-            pyautogui.hotkey('command', 'c')  # copy
-
-        # Save file occasionally
-        if random.random() > 0.6:
-            pyautogui.hotkey('command', 's')
-
-        # Add more realistic coding patterns
-        if random.random() > 0.6:
-            self._simulate_debugging_session()
-
-    def _simulate_debugging_session(self) -> None:
-        """Simulate a debugging session in VSCode."""
-        if not self.running:
-            return
-        # Set breakpoint
-        pyautogui.press('f9')
-        time.sleep(random.uniform(1, 2))
-
-        # Start debugging
-        pyautogui.hotkey('f5')
-        time.sleep(random.uniform(3, 8))
-
-        # Step through code
-        for _ in range(random.randint(2, 5)):
-            step_action = random.choice(
-                ['f10', 'f11'])  # Step over or step into
-            pyautogui.press(step_action)
-            time.sleep(random.uniform(2, 5))
-
-            # Inspect variables
-            if random.random() > 0.7:
-                self.natural_mouse_movement(
-                    random.randint(100, 400),
-                    random.randint(200, 500)
-                )
-                pyautogui.click()
-                time.sleep(random.uniform(1, 3))
-
-        # Stop debugging
-        pyautogui.hotkey('shift', 'f5')
-        time.sleep(random.uniform(1, 2))
-
-    def _vscode_ui_interactions(self) -> None:
-        """Simulate interactions with VSCode UI elements."""
-        if not self.running:
-            return
-        ui_actions = [
-            self.vscode_open_explorer,
-            self.vscode_open_extension,
-            self.vscode_toggle_sidebar,
-            self.vscode_split_editor,
-            self.vscode_command_palette
-        ]
-        for action in random.sample(ui_actions, random.randint(1, 3)):
-            action()
-            time.sleep(random.uniform(3, 8))
-            # simulate clicking on a UI element (e.g. an explorer item or extension)
-            x, y = random.randint(100, 700), random.randint(100, 500)
-            self.natural_mouse_movement(x, y)
-            pyautogui.click()
-            time.sleep(random.uniform(1, 3))
-
-    def vscode_navigate_code(self) -> None:
-        """Navigate through code using VSCode's code navigation features."""
-        navigation_actions = [
-            (lambda: pyautogui.hotkey('command', 'f12'), "Go to Definition"),
-            (lambda: pyautogui.hotkey('command', 'shift', 'o'), "Go to Symbol"),
-            (lambda: pyautogui.hotkey('command', 'shift', 'r'), "Go to References"),
-            (lambda: pyautogui.hotkey('alt', 'left'), "Go Back"),
-            (lambda: pyautogui.hotkey('command', 'k', 'command', 'i'), "Show Hover")
-        ]
-
-        for action, name in random.sample(navigation_actions, random.randint(2, 4)):
-            action()
-            time.sleep(random.uniform(2, 5))
-
-    def vscode_dev_tools(self) -> None:
-        """Use various VSCode development tools."""
-        dev_actions = [
-            (lambda: pyautogui.hotkey('command', 'shift', 'f'), "Global Search"),
-            (lambda: pyautogui.hotkey('command', '.'), "Quick Fix"),
-            (lambda: pyautogui.hotkey('command', 'k',
-             'command', 'f'), "Format Selection"),
-            (lambda: pyautogui.hotkey('f8'), "Go to Next Problem"),
-            (lambda: pyautogui.hotkey('command', 'shift', 'm'), "Show Problems Panel")
-        ]
-
-        for action, name in random.sample(dev_actions, random.randint(2, 4)):
-            action()
-            time.sleep(random.uniform(1.5, 4))
-
-    def perform_random_tasks(self) -> None:
-        """Execute a random sequence of tasks with macOS‐native app switching."""
-        quick_task_sequences = [
-            {
-                'name': 'Quick Code Review',
-                'actions': [
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self.vscode_search_files(),
-                    lambda: self.natural_typing('main.py'),
-                    lambda: pyautogui.press('return'),
-                    lambda: self.natural_scroll(
-                        'down', random.randint(100, 200))
-                ]
-            },
-            {
-                'name': 'Quick Documentation Check',
-                'actions': [
-                    lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.chrome_stackoverflow_search(
-                        'python quick example'),
-                    lambda: self.natural_scroll(
-                        'down', random.randint(100, 200))
-                ]
-            },
-            {
-                'name': 'Quick Terminal Check',
-                'actions': [
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self.vscode_toggle_terminal(),
-                    lambda: self.natural_typing('git status'),
-                    lambda: pyautogui.press('return'),
-                    lambda: time.sleep(random.uniform(1, 2))
-                ]
-            },
-            {
-                'name': 'Quick Debug Check',
-                'actions': [
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: pyautogui.hotkey('command', 'shift', 'm'),
-                    lambda: time.sleep(random.uniform(1, 2)),
-                    lambda: pyautogui.press('escape')
-                ]
-            }
-        ]
-
-        # Select and execute 1-2 quick sequences for short duration
-        selected_sequences = random.sample(
-            quick_task_sequences, random.randint(1, 2))
-
-        for sequence in selected_sequences:
-            print(f"\nExecuting quick task: {sequence['name']}")
-            for action in sequence['actions']:
-                if not self.running or self.paused:
-                    return
-                try:
-                    action()
-                except Exception as e:
-                    print(f"Error in {sequence['name']}: {e}")
-                    continue
-                # Shorter pauses between actions
-                time.sleep(random.uniform(0.5, 1))
-
-        task_sequences = [
-            {
-                'name': 'Documentation Research',
-                'actions': [
-                    lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.chrome_navigate('https://github.com'),
-                    lambda: self.natural_scroll(
-                        'down', random.randint(200, 500)),
-                    lambda: time.sleep(random.uniform(10, 20)),
-                    lambda: self.chrome_navigate(
-                        'https://github.com/sajjadjaved01'),
-                    lambda: self.natural_scroll(
-                        'down', random.randint(300, 600))
-                ]
-            },
-            {
-                'name': 'Code Review',
-                'actions': [
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self.vscode_open_explorer(),
-                    lambda: time.sleep(random.uniform(3, 5)),
-                    lambda: self.natural_typing('git diff'),
-                    lambda: pyautogui.press('return'),
-                    lambda: self.natural_scroll(
-                        'down', random.randint(100, 300))
-                ]
-            },
-            {
-                'name': 'Bug Investigation',
-                'actions': [
-                    lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.chrome_stackoverflow_search(
-                        'python error handling best practices'),
-                    lambda: time.sleep(random.uniform(5, 10)),
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self._simulate_debugging_session()
-                ]
-            },
-            {
-                'name': 'API Testing',
-                'actions': [
-                    lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.chrome_navigate('http://localhost:8000'),
-                    lambda: time.sleep(random.uniform(3, 7)),
-                    lambda: self.natural_scroll(
-                        'down', random.randint(200, 400)),
-                    lambda: self.browser_refresh()
-                ]
-            }
-        ]
-
-        # Randomly select and execute 2-3 unique task sequences
-        selected_sequences = random.sample(
-            task_sequences, random.randint(2, 3))
-
-        for sequence in selected_sequences:
-            print(f"\nExecuting task sequence: {sequence['name']}")
-            for action in sequence['actions']:
-                if not self.running or self.paused:
-                    return
-                try:
-                    action()
-                except Exception as e:
-                    print(f"Error in {sequence['name']}: {e}")
-                    continue
-
-        extended_task_sequences = [
-            {
-                'name': 'Full Development Cycle',
-                'actions': [
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self._vscode_coding_session(),
-                    lambda: time.sleep(random.uniform(180, 300)),  # 3-5 minutes coding
-                    lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.chrome_stackoverflow_search('laravel best practices with vite'),
-                    lambda: time.sleep(random.uniform(120, 180)),  # 2-3 minutes reading
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self._simulate_debugging_session(),
-                    lambda: time.sleep(random.uniform(240, 360))   # 4-6 minutes debugging
-                ]
-            },
-            {
-                'name': 'Developer Intensive Workflow',
-                'actions': [
-                    lambda: self.switch_to_app('Visual Studio Code'),
-                    lambda: self.vscode_search_files(),
-                    lambda: time.sleep(1),
-                    lambda: self.natural_mouse_movement(random.randint(300, 500), random.randint(200, 300)),
-                    lambda: self.natural_typing('def new_function():'),
-                    lambda: pyautogui.press('return'),
-                    lambda: self.natural_typing('    pass'),
-                    lambda: pyautogui.press('return'),
-                    lambda: time.sleep(1),
-                    lambda: self.natural_mouse_movement(random.randint(300, 500), random.randint(400, 600)),
-                    lambda: self.click_position(random.randint(300, 500), random.randint(400, 600)),
-                    lambda: self.switch_tab('next'),
-                    lambda: time.sleep(3),
-                    lambda: self.vscode_dev_tools(),
-                    lambda: self.natural_mouse_wiggle(),
-                    lambda: self.vscode_toggle_terminal(),
-                    lambda: self.natural_typing('npm start'),
-                    lambda: pyautogui.press('return'),
-                    lambda: time.sleep(3),
-                    lambda: self.switch_to_app('Google Chrome'),
-                    lambda: self.natural_mouse_movement(random.randint(100, 300), random.randint(100, 300)),
-                    lambda: self.chrome_google_search('latest vscode tips'),
-                    lambda: self.browser_refresh(),
-                    # Extended macOS-native work period (15–25 min)
-                    lambda: time.sleep(random.uniform(900, 1500))
-                ]
-            }
-        ]
         
-        # Ensure macOS app focus after each extended task action
-        selected_sequences = random.sample(extended_task_sequences, random.randint(1, 2))
-        for sequence in selected_sequences:
-            print(f"\nExecuting extended task: {sequence['name']}")
-            for action in sequence['actions']:
-                if not self.running or self.paused:
-                    return
-                try:
-                    action()
-                    # Verify macOS frontmost app after critical actions
-                    if not self.verify_application_state('Visual Studio Code') and not self.verify_application_state('Google Chrome'):
-                        raise RuntimeError("Application switch failed")
-                    if random.random() > 0.7:
-                        time.sleep(random.uniform(30, 60))
-                except Exception as e:
-                    print(f"Error in {sequence['name']}: {e}")
-                    continue
+    def perform_mouse_action(self) -> None:
+        """Perform a random mouse action."""
+        # Get screen dimensions
+        screen_width, screen_height = pyautogui.size()
+        
+        # Choose a random action
+        action = random.choice([
+            "move", "move", "move",  # Higher weight for simple movement
+            "click", "click",        # Medium weight for clicks
+            "scroll", "wiggle"       # Lower weight for other actions
+        ])
+        
+        try:
+            if action == "move":
+                # Move to random position on screen
+                x = random.randint(100, screen_width - 100)
+                y = random.randint(100, screen_height - 100)
+                self.natural_mouse_movement(x, y)
+                print(f"Mouse moved to {x}, {y}")
+                
+            elif action == "click":
+                # Click at current or random position
+                if random.random() < 0.5:  # 50% chance to click at current position
+                    x, y = pyautogui.position()
+                else:
+                    x = random.randint(100, screen_width - 100)
+                    y = random.randint(100, screen_height - 100)
+                    self.natural_mouse_movement(x, y)
+                    time.sleep(random.uniform(0.1, 0.3))
+                pyautogui.click(x, y)
+                print(f"Clicked at {x}, {y}")
+                
+            elif action == "scroll":
+                # Scroll up or down
+                direction = random.choice(["up", "down"])
+                amount = random.randint(1, 5)
+                self.scroll_page(direction, amount)
+                print(f"Scrolled {direction} {amount} times")
+                
+            elif action == "wiggle":
+                # Small random movement
+                self.random_mouse_wiggle()
+                print("Mouse wiggled")
+        
+        except Exception as e:
+            print(f"Error in mouse action: {e}")
+            
+    class FileChangeHandler(FileSystemEventHandler):
+        """Handler for file system changes."""
+        
+        def __init__(self, callback):
+            self.callback = callback
+            super().__init__()
+            
+        def on_any_event(self, event):
+            """Called when a file system event occurs."""
+            if event.is_directory:
+                return
+            self.callback(event)
+            
+    def handle_file_change(self, event) -> None:
+        """Handle file change events in the specified format [status] (filename)."""
+        event_type = event.event_type
+        path = event.src_path
+        filename = os.path.basename(path)
+        
+        # Map event_type to status
+        status_map = {
+            'created': 'created',
+            'deleted': 'deleted',
+            'modified': 'changed',
+            'moved': 'moved'
+        }
+        status = status_map.get(event_type, event_type)
+        
+        # Print in the requested format
+        print(f"[{status}] ({filename})")
+    
+    def start_file_monitoring(self) -> None:
+        """Start monitoring for file changes."""
+        if self.observer is None:
+            try:
+                # Expand the path
+                monitor_path = os.path.expanduser(self.config['monitor_path']['base_path'])
+
+                # Create event handler and observer
+                event_handler = self.FileChangeHandler(self.handle_file_change)
+                self.observer = Observer()
+                self.observer.schedule(event_handler, monitor_path, recursive=True)
+                self.observer.start()
+                self.file_monitor_running = True
+                print(f"File monitoring started for: {monitor_path}")
+            except Exception as e:
+                print(f"Error starting file monitoring: {e}")
+        
+    def stop_file_monitoring(self) -> None:
+        """Stop file monitoring."""
+        if self.observer is not None and self.file_monitor_running:
+            try:
+                self.observer.stop()
+                self.observer.join()
+                self.observer = None
+                self.file_monitor_running = False
+                print("File monitoring stopped")
+            except Exception as e:
+                print(f"Error stopping file monitoring: {e}")
 
 
 # Example usage with global hotkeys
@@ -884,6 +633,8 @@ if __name__ == "__main__":
     auto = MacAutomation()
     auto.setup_global_hotkeys()
     print("Ready! Use Ctrl+Alt+S to start the automation.")
+    print("Use Ctrl+Alt+T to set text that will be typed.")
+    print("The automation will monitor ~/Library/Application Support for file changes.")
 
     # Keep the main thread running to listen for hotkeys
     try:
