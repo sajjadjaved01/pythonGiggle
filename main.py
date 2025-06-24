@@ -31,8 +31,8 @@ class MacAutomation:
         pyautogui.PAUSE = self.config['safety']['pause']
 
         # Parse the XML file
-        orgPath = self.config['monitor_path']['base_path'] + '/data/hubstaff.com/f8fb64d046ca609d94cdc23ecfdf83bb07647126/Organization.xml'
-        organization_data = self.parse_organization_xml(orgPath)
+        # orgPath = self.config['monitor_path']['base_path'] + '/data/hubstaff.com/f8fb64d046ca609d94cdc23ecfdf83bb07647126/Organization.xml'
+        # organization_data = self.parse_organization_xml(orgPath)
         
         # Text to be typed, will be updated by user
         self.text_to_type = ""
@@ -164,60 +164,6 @@ class MacAutomation:
         pyautogui.hotkey('command', 'v')
         pyautogui.press('return')
 
-    def chrome_google_search(self, query: str) -> None:
-        """Perform a Google search.
-
-        Args:
-            query (str): Search query text
-        """
-        self.chrome_navigate('https://www.google.com')
-        time.sleep(1.5)  # Wait for page load
-        pyperclip.copy(query)
-        pyautogui.hotkey('command', 'v')
-        pyautogui.press('return')
-        time.sleep(2)  # Wait for search results
-
-    def chrome_stackoverflow_search(self, query: str) -> None:
-        """Search Stack Overflow for a query.
-
-        Args:
-            query (str): Search query text
-        """
-        self.chrome_navigate('https://stackoverflow.com')
-        time.sleep(2.0)  # Wait for page load
-        # Find and click the search box
-        pyautogui.hotkey('command', 'f')
-        time.sleep(0.5)
-        pyautogui.write('Search')
-        time.sleep(0.5)
-        pyautogui.press('escape')
-        time.sleep(0.5)
-        pyautogui.press('tab')  # Focus on search box
-        pyperclip.copy(query)
-        pyautogui.hotkey('command', 'v')
-        pyautogui.press('return')
-        time.sleep(2.5)  # Wait for search results
-
-    def chrome_bookmark_page(self) -> None:
-        """Bookmark the current page in Chrome."""
-        pyautogui.hotkey('command', 'd')
-
-    def chrome_open_bookmarks(self) -> None:
-        """Open the bookmarks bar in Chrome."""
-        pyautogui.hotkey('command', 'shift', 'b')
-
-    def chrome_show_history(self) -> None:
-        """Show browsing history in Chrome."""
-        pyautogui.hotkey('command', 'y')
-
-    def chrome_clear_history(self) -> None:
-        """Clear browsing history in Chrome."""
-        self.chrome_show_history()
-        time.sleep(1)
-        pyautogui.hotkey('command', 'a')  # Select all
-        pyautogui.press('delete')
-        time.sleep(1)
-
     def vscode_open_explorer(self) -> None:
         """Open the file explorer in VSCode."""
         pyautogui.hotkey('command', 'shift', 'e')
@@ -307,17 +253,6 @@ class MacAutomation:
     def browser_reopen_tab(self) -> None:
         """Reopen last closed tab."""
         pyautogui.hotkey('command', 'shift', 't')
-
-    def browser_zoom(self, action: str = 'in') -> None:
-        """Zoom in or out in browser.
-
-        Args:
-            action (str): 'in' or 'out'
-        """
-        if action == 'in':
-            pyautogui.hotkey('command', '+')
-        else:
-            pyautogui.hotkey('command', '-')
 
     def natural_mouse_movement(self, x: int, y: int, duration: Optional[float] = None) -> None:
         """Move mouse in a more human-like curve pattern.
