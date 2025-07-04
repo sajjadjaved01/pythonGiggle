@@ -264,6 +264,42 @@ class MacAutomation:
         """Reopen last closed tab."""
         pyautogui.hotkey('command', 'shift', 't')
 
+    # Advanced VSCode workflow methods
+    def vscode_advanced_workflow(self, duration: int = 60) -> None:
+        """Run advanced VSCode workflow with new features.
+        
+        Args:
+            duration: Workflow duration in seconds
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < duration and self.running:
+            if self.paused:
+                time.sleep(0.5)
+                continue
+                
+            # Choose random VSCode action
+            actions = [
+                lambda: self.vscode.explore_codebase(10),
+                lambda: self.vscode.navigate_to_function('test_' + random.choice(['init', 'main', 'helper'])),
+                lambda: self.vscode.interact_with_intellisense(),
+                lambda: self.vscode.go_to_definition(),
+                lambda: self.vscode.find_all_references(),
+                lambda: self.gesture_controller.vscode_gesture_navigation(random.choice(['next_tab', 'prev_tab', 'zoom_in'])),
+                lambda: self.vscode.git_commit_workflow(),
+                lambda: self.vscode.debug_workflow([random.randint(10, 50) for _ in range(2)])
+            ]
+            
+            action = random.choice(actions)
+            try:
+                action()
+            except Exception as e:
+                print(f"VSCode workflow error: {e}")
+            
+            # Natural pause between actions
+            time.sleep(random.uniform(2, 5))
+    
+
     def natural_mouse_movement(self, x: int, y: int, duration: Optional[float] = None) -> None:
         """Move mouse in a more human-like curve pattern.
 
@@ -428,8 +464,13 @@ class MacAutomation:
                 if not self.running:
                     break
 
+                # Check if VSCode is active for advanced workflows
+                if self.verify_application_state('Visual Studio Code') and random.random() < 0.3:
+                    # Run VSCode advanced workflow
+                    self.vscode_advanced_workflow(duration=10)
+
                 # Determine if we should move the mouse (20-40% of the time)
-                if random.random() < 0.4:  # 40% maximum probability for mouse movement
+                elif random.random() < 0.4:  # 40% maximum probability for mouse movement
                     self.perform_mouse_action()
                 
                 # Otherwise, perform a keyboard action if text is available
