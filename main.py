@@ -10,9 +10,13 @@ import subprocess
 import os
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import tkinter as tk
-from tkinter import ttk
+# import tkinter as tk  # Not used in current implementation
+# from tkinter import ttk  # Not used in current implementation
 import xml.etree.ElementTree as ET
+from automation.gestures import GestureController
+from automation.mouse import NaturalMouseController
+from automation.vscode_actions import VSCodeAutomation
+import sys
 
 from automation.config import DEFAULT_CONFIG
 
@@ -40,6 +44,12 @@ class MacAutomation:
         # File monitoring setup
         self.observer = None
         self.file_monitor_running = False
+
+        # Initialize advanced controllers
+        self.gesture_controller = GestureController(self.config.get('gestures', {}))
+        self.mouse_controller = NaturalMouseController(self.config.get('advanced_mouse', {}))
+        self.vscode = VSCodeAutomation(self.config.get('vscode', {}))
+
 
     def _merge_config(self, custom_config: Dict[str, Any]) -> None:
         """Deep merge custom configuration with defaults."""
@@ -262,21 +272,7 @@ class MacAutomation:
             y (int): Target y coordinate
             duration (float, optional): Movement duration
         """
-        # Random duration if not specified
-        if duration is None:
-            duration = random.uniform(0.4, 1.2)
-
-        # Add slight randomness to target position
-        x += random.randint(-5, 5)
-        y += random.randint(-5, 5)
-
-        # Move with random easing function
-        pyautogui.moveTo(x, y, duration=duration,
-                         tween=random.choice([
-                             pyautogui.easeInQuad,
-                             pyautogui.easeOutQuad,
-                             pyautogui.easeInOutQuad
-                         ]))
+        self.mouse_controller.bezier_move(x, y, duration)
 
     def natural_typing(self, text: str, error_probability: float = 0.05) -> None:
         """Type text with human-like mistakes and corrections.
@@ -340,43 +336,52 @@ class MacAutomation:
 
     def _start_keyboard_listener(self) -> None:
         """Start the keyboard listener in a daemon thread."""
-        if self.listener is None or not self.listener.is_alive():
-            self.listener = keyboard.Listener(
-                on_press=self._on_key_press,
-                on_release=self._on_key_release,
-                daemon=True
-            )
-            self.listener.start()
+        try:
+            if self.listener is None or not self.listener.is_alive():
+                self.listener = keyboard.Listener(
+                    on_press=self._on_key_press,
+                    on_release=self._on_key_release
+                )
+                # Use daemon mode to ensure proper cleanup
+                self.listener.daemon = True
+                self.listener.start()
+        except Exception as e:
+            print(f"Error starting keyboard listener: {e}")
+            print("Note: pynput has compatibility issues with Python 3.13.")
+            print("Consider using Python 3.11 or 3.12 for full functionality.")
 
     def _on_key_press(self, key) -> None:
         """Handle key press events and trigger hotkey actions."""
-        self.current_keys.add(key)
+        try:
+            self.current_keys.add(key)
 
-        # Check for start combination
-        if self.start_keys.issubset(self.current_keys) and not self.running:
-            print("\nStarting automation workflow...")
-            self.running = True
-            # Wait 3 seconds before starting workflow
-            time.sleep(3)
-            # Start in a new thread to keep hotkeys responsive
-            threading.Thread(target=self.run_focused_workflow,
-                             daemon=True).start()
+            # Check for start combination
+            if self.start_keys.issubset(self.current_keys) and not self.running:
+                print("\nStarting automation workflow...")
+                self.running = True
+                # Wait 3 seconds before starting workflow
+                time.sleep(3)
+                # Start in a new thread to keep hotkeys responsive
+                threading.Thread(target=self.run_focused_workflow,
+                                 daemon=True).start()
 
-        # Check for stop combination
-        elif self.stop_keys.issubset(self.current_keys) and self.running:
-            print("\nStopping automation...")
-            self.running = False
-            self.paused = False
+            # Check for stop combination
+            elif self.stop_keys.issubset(self.current_keys) and self.running:
+                print("\nStopping automation...")
+                self.running = False
+                self.paused = False
 
-        # Check for pause combination
-        elif self.pause_keys.issubset(self.current_keys) and self.running:
-            self.paused = not self.paused
-            status = "Paused" if self.paused else "Resumed"
-            print(f"\n{status} automation...")
-            
-        # Check for text input combination
-        elif self.text_keys.issubset(self.current_keys):
-            self.set_text_to_type()
+            # Check for pause combination
+            elif self.pause_keys.issubset(self.current_keys) and self.running:
+                self.paused = not self.paused
+                status = "Paused" if self.paused else "Resumed"
+                print(f"\n{status} automation...")
+                
+            # Check for text input combination
+            elif self.text_keys.issubset(self.current_keys):
+                self.set_text_to_type()
+        except Exception as e:
+            print(f"Error in key press handler: {e}")
 
     def _on_key_release(self, key) -> None:
         """Handle key release events."""
